@@ -1,0 +1,53 @@
+name: Diagnose login (no purchase)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Inspect public login endpoint without credentials
+        shell: python
+        run: |
+          import urllib.request
+          import urllib.error
+          import http.cookiejar
+          import json
+          import re
+
+          opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+          base = 'https://www.dhlottery.co.kr'
+          headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'}
+          for path in ['/', '/user.do?method=login', '/login/selectRsaModulus.do']:
+              request_headers = dict(headers)
+              if path.endswith('selectRsaModulus.do'):
+                  request_headers.update({'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest', 'Referer': base + '/user.do?method=login'})
+              print('\nREQUEST:', path, flush=True)
+              try:
+                  response = opener.open(urllib.request.Request(base + path, headers=request_headers), timeout=25)
+                  body = response.read(262144).decode('utf-8', errors='replace')
+                  print('STATUS:', response.status)
+                  print('FINAL URL:', response.url)
+                  print('CONTENT TYPE:', response.headers.get('Content-Type'))
+                  print('READ CHARACTERS:', len(body))
+                  try:
+                      data = json.loads(body)
+                      print('JSON VALID: yes')
+                      if isinstance(data, dict):
+                          print('TOP LEVEL KEYS:', sorted(data.keys()))
+                          payload = data.get('data')
+                          print('RSA KEY PRESENT:', isinstance(payload, dict) and 'rsaModulus' in payload and 'publicExponent' in payload)
+                  except ValueError:
+                      print('JSON VALID: no')
+                      title = re.search(r'<title[^>]*>(.*?)</title>', body, re.I | re.S)
+                      print('HTML TITLE:', re.sub(r'\s+', ' ', title.group(1))[:200] if title else '(none)')
+                      for marker in ['접근', '차단', '점검', '서비스', '비정상', 'Access Denied', 'blocked', 'captcha', 'IP']:
+                          if marker.lower() in body.lower():
+                              print('PAGE MARKER:', marker)
+                      text = re.sub(r'<script\b[^>]*>.*?</script>|<style\b[^>]*>.*?</style>', '', body, flags=re.I | re.S)
+                      text = re.sub(r'<[^>]+>', ' ', text)
+                      print('PUBLIC PAGE TEXT:', re.sub(r'\s+', ' ', text).strip()[:1200])
+              except Exception as error:
+                  print('ERROR:', type(error).__name__, str(error))
